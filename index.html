@@ -1,0 +1,210 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pramod Tech Connect</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f0f0f0;
+      color: #333;
+    }
+    header {
+      background: #4a148c;
+      color: white;
+      padding: 10px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #videos {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      margin: 20px;
+    }
+    video {
+      width: 300px;
+      border-radius: 10px;
+      background: black;
+    }
+    #controls, #chat, #fileInput {
+      text-align: center;
+      margin-top: 10px;
+    }
+    button {
+      padding: 10px 15px;
+      margin: 5px;
+      border: none;
+      border-radius: 6px;
+      background: #6a11cb;
+      color: white;
+      cursor: pointer;
+    }
+    input {
+      padding: 8px;
+      margin: 5px;
+      border-radius: 5px;
+    }
+    #messages {
+      max-height: 200px;
+      overflow-y: auto;
+      margin: 10px auto;
+      padding: 10px;
+      width: 90%;
+      background: white;
+      border-radius: 10px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    }
+    .system-log {
+      font-style: italic;
+      color: #888;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h2>Pramod Tech Connect</h2>
+    <span id="clock"></span>
+  </header>
+  <div style="text-align:center; margin-top:20px;">
+    <input id="username" placeholder="Your Name" />
+    <input id="room" placeholder="Room Code" />
+    <button onclick="joinCall()">Join Room</button>
+  </div>
+  <div id="videos">
+    <video id="myVideo" autoplay muted></video>
+  </div>
+  <div id="controls">
+    <button onclick="toggleMic()">🎙️ Mic</button>
+    <button onclick="toggleCamera()">📷 Camera</button>
+    <button onclick="shareScreen()">🖥️ Share Screen</button>
+  </div>
+  <div id="chat">
+    <input id="msgInput" placeholder="Type message" />
+    <button onclick="sendMessage()">Send</button>
+  </div>
+  <div id="fileInput">
+    <input type="file" id="file" />
+    <button onclick="sendFile()">Send File</button>
+  </div>
+  <div id="messages"></div>
+
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <script>
+    let myPeer, connList = {}, mediaStream;
+    const myVideo = document.getElementById("myVideo");
+    const videos = document.getElementById("videos");
+    const messages = document.getElementById("messages");
+
+    function log(msg) {
+      const now = new Date().toLocaleString("en-US", { hour12: true });
+      const div = document.createElement("div");
+      div.className = "system-log";
+      div.innerText = `🕒 ${now} — ${msg}`;
+      messages.appendChild(div);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    function joinCall() {
+      const name = document.getElementById("username").value.trim();
+      const room = document.getElementById("room").value.trim();
+      if (!name || !room) return alert("Enter name & room");
+
+      myPeer = new Peer(name + "-" + Math.floor(Math.random()*10000));
+      navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
+        mediaStream = stream;
+        myVideo.srcObject = stream;
+        myVideo.muted = true;
+        myVideo.play();
+
+        myPeer.on('open', id => {
+          const socket = new EventSource("https://peerjs-server.herokuapp.com/peerjs/id"); // Dummy for trigger
+          log(`${name} joined the room`);
+        });
+
+        myPeer.on('call', call => {
+          if (confirm(`${call.peer} wants to join. Accept?`)) {
+            call.answer(stream);
+            call.on('stream', remoteStream => addVideo(remoteStream, call.peer));
+          }
+        });
+
+        myPeer.on('connection', conn => {
+          conn.on('data', data => {
+            if (data.type === 'msg') log(`${data.name}: ${data.text}`);
+            if (data.type === 'status') log(data.text);
+          });
+        });
+
+        // Connect manually to room peers
+        setTimeout(() => {
+          for (let i = 0; i < 3; i++) {
+            const peerId = room + "-" + i;
+            if (peerId !== myPeer.id) {
+              const call = myPeer.call(peerId, stream);
+              call?.on('stream', remoteStream => addVideo(remoteStream, peerId));
+              const conn = myPeer.connect(peerId);
+              conn.on('open', () => {
+                connList[peerId] = conn;
+                conn.send({ type: "status", text: `${name} joined the room` });
+              });
+            }
+          }
+        }, 2000);
+      });
+    }
+
+    function addVideo(stream, peerId) {
+      const video = document.createElement("video");
+      video.srcObject = stream;
+      video.autoplay = true;
+      videos.appendChild(video);
+    }
+
+    function toggleMic() {
+      const enabled = mediaStream.getAudioTracks()[0].enabled;
+      mediaStream.getAudioTracks()[0].enabled = !enabled;
+      log(enabled ? "Mic muted" : "Mic unmuted");
+    }
+
+    function toggleCamera() {
+      const enabled = mediaStream.getVideoTracks()[0].enabled;
+      mediaStream.getVideoTracks()[0].enabled = !enabled;
+      log(enabled ? "Camera turned off" : "Camera turned on");
+    }
+
+    function sendMessage() {
+      const text = document.getElementById("msgInput").value;
+      if (!text) return;
+      for (let id in connList) connList[id].send({ type: "msg", text, name: document.getElementById("username").value });
+      log(`You: ${text}`);
+      document.getElementById("msgInput").value = "";
+    }
+
+    function sendFile() {
+      const file = document.getElementById("file").files[0];
+      if (!file) return;
+      log(`${document.getElementById("username").value} shared a file: ${file.name}`);
+    }
+
+    function shareScreen() {
+      navigator.mediaDevices.getDisplayMedia({ video: true }).then(screenStream => {
+        const screenTrack = screenStream.getVideoTracks()[0];
+        mediaStream.getVideoTracks()[0].stop();
+        mediaStream.removeTrack(mediaStream.getVideoTracks()[0]);
+        mediaStream.addTrack(screenTrack);
+        log("Started screen sharing");
+      });
+    }
+
+    setInterval(() => {
+      document.getElementById("clock").innerText = new Date().toLocaleTimeString();
+    }, 1000);
+  </script>
+</body>
+</html>
